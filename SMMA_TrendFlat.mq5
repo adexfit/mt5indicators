@@ -4,6 +4,12 @@
 //|   like DynamicTrendMatrixMTF_Flat: a colored horizontal line      |
 //|   with flip arrows above / below it.                              |
 //|                                                                   |
+//+------------------------------------------------------------------+
+//|                                              SMMA_TrendFlat.mq5   |
+//|   Flat trend indicator drawn in a separate sub-window, styled     |
+//|   like DynamicTrendMatrixMTF_Flat: a colored horizontal line      |
+//|   with flip arrows above / below it.                              |
+//|                                                                   |
 //|   Trend engine (current timeframe, closed bars only):             |
 //|     - Two SMMAs of period InpSmmaPeriod: one on High, one on Low. |
 //|     - Flip GREEN: a bullish candle (close>open) closes ABOVE the  |
@@ -192,3 +198,4 @@ int OnCalculate(const int rates_total,
    return(rates_total);
   }
 //+------------------------------------------------------------------+
+
