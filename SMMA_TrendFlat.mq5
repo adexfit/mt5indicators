@@ -46,10 +46,11 @@
 #define COL_NEUTRAL 2
 
 //--- Inputs ---
-input int    InpSmmaPeriod = 5;    // SMMA Period (High & Low)
-input bool   InpShowArrows = true; // Show Flip Arrows
-input double InpLineLevel  = 1.0;  // Trend Line Level
-input double InpArrowGap   = 0.3;  // Arrow Gap from Line
+input int    InpSmmaPeriod    = 5;    // SMMA Period (High & Low)
+input double InpMinBreakPips  = 0.0;  // Min Break (pips) beyond SMMA to signal
+input bool   InpShowArrows    = true; // Show Flip Arrows
+input double InpLineLevel     = 1.0;  // Trend Line Level
+input double InpArrowGap      = 0.3;  // Arrow Gap from Line
 
 //--- Plot buffers
 double TrendLineBuf[];
@@ -64,6 +65,9 @@ double TrendStateBuf[];
 //--- SMMA indicator handles
 int hSmmaHigh = INVALID_HANDLE;
 int hSmmaLow  = INVALID_HANDLE;
+
+//--- pip size (digits-aware: 10*Point on 3/5-digit symbols, else Point)
+double g_pip = 0.0;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -82,6 +86,8 @@ int OnInit()
    PlotIndexSetInteger(2,PLOT_ARROW_SHIFT,0);
    for(int p=0;p<3;p++)
       PlotIndexSetDouble(p,PLOT_EMPTY_VALUE,EMPTY_VALUE);
+
+   g_pip = ((_Digits==3 || _Digits==5) ? 10.0 : 1.0) * _Point;
 
    int per = MathMax(1,InpSmmaPeriod);
    hSmmaHigh = iMA(_Symbol,_Period,per,0,MODE_SMMA,PRICE_HIGH);
@@ -142,7 +148,8 @@ int OnCalculate(const int rates_total,
       return(prev_calculated);
 
    //--- recompute from the last confirmed bar of the previous pass
-   int start = (prev_calculated>0) ? prev_calculated-1 : 0;
+   int    start = (prev_calculated>0) ? prev_calculated-1 : 0;
+   double thr   = InpMinBreakPips * g_pip;  // min break distance in price
 
    for(int i=start;i<rates_total;i++)
      {
@@ -157,10 +164,10 @@ int OnCalculate(const int rates_total,
          bool green = (close[i] > open[i]);
          bool red   = (close[i] < open[i]);
 
-         if(green && close[i] > SmmaHighBuf[i])
-            trend = 1;                       // bullish break above SMMA(High)
-         else if(red && close[i] < SmmaLowBuf[i])
-            trend = -1;                      // bearish break below SMMA(Low)
+         if(green && close[i] > SmmaHighBuf[i] + thr)
+            trend = 1;                       // bullish break: close exceeds SMMA(High) by >= thr
+         else if(red && close[i] < SmmaLowBuf[i] - thr)
+            trend = -1;                      // bearish break: close below SMMA(Low) by >= thr
          // otherwise: hold the previous trend (flat continuation)
         }
 
