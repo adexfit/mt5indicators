@@ -1,0 +1,82 @@
+//@version=6
+// SMMA_TrendFlat_MTF - Pine port of SMMA_TrendFlat_MTF.mq5
+// Multi-timeframe flat trend line in a separate pane with flip arrows.
+// The trend is computed on `htf` and mapped onto the current chart's bars.
+//
+//   - Two SMMAs of period `smmaPeriod`: one on High, one on Low, computed
+//     on the target timeframe (Pine ta.rma == MetaTrader MODE_SMMA).
+//   - Flip GREEN: a bullish HTF candle (close>open) closes ABOVE SMMA(High)
+//     by >= minBreakPips. Trend stays green even if later closes fall back
+//     below SMMA(High).
+//   - Flip RED: a bearish HTF candle (close<open) closes BELOW SMMA(Low)
+//     by >= minBreakPips. Trend stays red (even for closes between the two
+//     SMMAs) until a bullish HTF candle closes above SMMA(High) again.
+//   - Green arrow BELOW the line on a red->green flip (once per HTF bar).
+//   - Red arrow ABOVE the line on a green->red flip (once per HTF bar).
+//
+// No repaint: HTF values are requested with lookahead_off and read from the
+// last CONFIRMED HTF bar, so the trend only changes after an HTF candle
+// closes - the same "closed bars only" rule as the MQL version.
+indicator("SMMA Flat Trend MTF", "SMMA Flat MTF", overlay = false)
+
+// ---------------- Inputs ----------------
+htf          = input.timeframe("60", "Indicator Timeframe")
+smmaPeriod   = input.int(5,    "SMMA Period (High & Low)", minval = 1)
+minBreakPips = input.float(0.0,"Min Break (pips) beyond SMMA", minval = 0.0, step = 0.1)
+showArrows   = input.bool(true,"Show Flip Arrows")
+lineLevel    = input.float(1.0,"Trend Line Level")
+arrowGap     = input.float(0.3,"Arrow Gap from Line", minval = 0.0)
+
+// ---------------- Pip size (digits-aware, mirrors _Digits/_Point) --------
+digits = int(math.round(-math.log10(syminfo.mintick)))
+pip    = (digits == 3 or digits == 5) ? syminfo.mintick * 10 : syminfo.mintick
+thr    = minBreakPips * pip
+
+// ---------------- Guard: target TF must be >= chart TF --------------------
+// (a lower TF can't be mapped onto higher-TF bars; clamp to chart TF)
+tfSecInput = timeframe.in_seconds(htf)
+tfSecChart = timeframe.in_seconds(timeframe.period)
+useTF      = tfSecInput < tfSecChart ? timeframe.period : htf
+
+// ---------------- Trend engine, evaluated on the target timeframe --------
+// This function runs in the context of `useTF` via request.security().
+htfTrend() =>
+    smmaHigh = ta.rma(high, smmaPeriod)
+    smmaLow  = ta.rma(low,  smmaPeriod)
+    green = close > open
+    red   = close < open
+    bull  = green and not na(smmaHigh) and close > smmaHigh + thr
+    bear  = red   and not na(smmaLow)  and close < smmaLow  - thr
+    var int t = 0
+    if bull
+        t := 1
+    else if bear
+        t := -1
+    // else hold previous trend (flat continuation)
+    t
+
+// Read the CONFIRMED HTF bar ([1] + lookahead_off) -> no repaint
+trend = request.security(syminfo.tickerid, useTF, htfTrend()[1],
+                         lookahead = barmerge.lookahead_off)
+
+// ---------------- Flip detection on the mapped series --------------------
+// trend changes value only on the chart bar where a new confirmed HTF bar
+// arrives, so comparing to the previous chart bar fires the arrow once.
+flipToGreen = trend ==  1 and trend[1] !=  1
+flipToRed   = trend == -1 and trend[1] != -1
+
+// ---------------- Plots ----------------
+lineColor = trend == 1 ? color.lime : trend == -1 ? color.red : color.gray
+plot(lineLevel, "Trend", color = lineColor, linewidth = 3, style = plot.style_line)
+
+// Green arrow BELOW the line (bullish flip); red arrow ABOVE the line (bearish flip)
+plotshape(showArrows and flipToGreen ? lineLevel - arrowGap : na, "Flip Up",
+          style = shape.triangleup,   location = location.absolute,
+          color = color.lime, size = size.small)
+plotshape(showArrows and flipToRed   ? lineLevel + arrowGap : na, "Flip Down",
+          style = shape.triangledown, location = location.absolute,
+          color = color.red,  size = size.small)
+
+// ---------------- Alerts ----------------
+alertcondition(flipToGreen, "Trend flip UP (green)", "SMMA MTF trend flipped GREEN")
+alertcondition(flipToRed,   "Trend flip DOWN (red)", "SMMA MTF trend flipped RED")
