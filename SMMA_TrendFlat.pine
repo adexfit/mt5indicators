@@ -1,0 +1,65 @@
+//@version=6
+// SMMA_TrendFlat - Pine port of SMMA_TrendFlat.mq5
+// Flat trend line in a separate pane with flip arrows.
+//   - Two SMMAs of period `smmaPeriod`: one on High, one on Low.
+//     (Pine ta.rma == MetaTrader MODE_SMMA / Wilder's smoothing)
+//   - Flip GREEN: a bullish candle (close>open) closes ABOVE SMMA(High)
+//     by >= minBreakPips. Trend stays green even if later closes fall
+//     back below SMMA(High).
+//   - Flip RED: a bearish candle (close<open) closes BELOW SMMA(Low)
+//     by >= minBreakPips. Trend stays red (even for closes between the
+//     two SMMAs) until a bullish candle closes above SMMA(High) again.
+//   - Green arrow BELOW the line on a red->green flip.
+//   - Red arrow ABOVE the line on a green->red flip.
+//   - Trend only updates on confirmed (closed) bars -> no repaint.
+indicator("SMMA Flat Trend", "SMMA Flat", overlay = false)
+
+// ---------------- Inputs ----------------
+smmaPeriod   = input.int(5,    "SMMA Period (High & Low)", minval = 1)
+minBreakPips = input.float(0.0,"Min Break (pips) beyond SMMA", minval = 0.0, step = 0.1)
+showArrows   = input.bool(true,"Show Flip Arrows")
+lineLevel    = input.float(1.0,"Trend Line Level")
+arrowGap     = input.float(0.3,"Arrow Gap from Line", minval = 0.0)
+
+// ---------------- Pip size (digits-aware, mirrors _Digits/_Point) --------
+digits = int(math.round(-math.log10(syminfo.mintick)))
+pip    = (digits == 3 or digits == 5) ? syminfo.mintick * 10 : syminfo.mintick
+thr    = minBreakPips * pip
+
+// ---------------- SMMAs ----------------
+smmaHigh = ta.rma(high, smmaPeriod)
+smmaLow  = ta.rma(low,  smmaPeriod)
+
+// ---------------- Trend engine (closed bars only) ----------------
+green = close > open
+red   = close < open
+bull  = green and not na(smmaHigh) and close > smmaHigh + thr   // break above SMMA(High)
+bear  = red   and not na(smmaLow)  and close < smmaLow  - thr   // break below SMMA(Low)
+
+var int trend = 0
+if barstate.isconfirmed
+    if bull
+        trend := 1
+    else if bear
+        trend := -1
+    // else: hold previous trend (flat continuation)
+
+// Flip detection (trend only changes on confirmed bars, so no premature arrows)
+flipToGreen = trend ==  1 and trend[1] !=  1
+flipToRed   = trend == -1 and trend[1] != -1
+
+// ---------------- Plots ----------------
+lineColor = trend == 1 ? color.lime : trend == -1 ? color.red : color.gray
+plot(lineLevel, "Trend", color = lineColor, linewidth = 3, style = plot.style_line)
+
+// Green arrow BELOW the line (bullish flip); red arrow ABOVE the line (bearish flip)
+plotshape(showArrows and flipToGreen ? lineLevel - arrowGap : na, "Flip Up",
+          style = shape.triangleup,   location = location.absolute,
+          color = color.lime, size = size.small)
+plotshape(showArrows and flipToRed   ? lineLevel + arrowGap : na, "Flip Down",
+          style = shape.triangledown, location = location.absolute,
+          color = color.red,  size = size.small)
+
+// ---------------- Alerts ----------------
+alertcondition(flipToGreen, "Trend flip UP (green)",   "SMMA trend flipped GREEN")
+alertcondition(flipToRed,   "Trend flip DOWN (red)",   "SMMA trend flipped RED")
