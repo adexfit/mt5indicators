@@ -24,7 +24,7 @@
 #property version   "1.00"
 #property indicator_separate_window
 
-#property indicator_buffers 7
+#property indicator_buffers 5
 #property indicator_plots   3
 
 //--- Plot 0: Flat trend line - COLOR by trend
@@ -61,9 +61,7 @@ double TrendLineBuf[];
 double TrendLineColBuf[];
 double LongArrowBuf[];
 double ShortArrowBuf[];
-//--- Calculation buffers (same-TF path)
-double SmmaHighBuf[];
-double SmmaLowBuf[];
+//--- Calculation buffer (same-TF path; persists trend across calls)
 double TrendStateBuf[];
 
 //--- SMMA indicator handles (created on the target timeframe)
@@ -83,6 +81,10 @@ double   hOpen[], hHigh[], hLow[], hClose[];
 double   hSmH[], hSmL[];
 double   hTrend[], hLongFlip[], hShortFlip[];
 
+//--- MTF rebuild gate (Mode B): htf bar count / newest htf open time last built
+int      g_htfCount  = 0;
+datetime g_htfNewest = 0;
+
 //+------------------------------------------------------------------+
 int OnInit()
   {
@@ -90,9 +92,7 @@ int OnInit()
    SetIndexBuffer(1,TrendLineColBuf,INDICATOR_COLOR_INDEX);
    SetIndexBuffer(2,LongArrowBuf   ,INDICATOR_DATA);
    SetIndexBuffer(3,ShortArrowBuf  ,INDICATOR_DATA);
-   SetIndexBuffer(4,SmmaHighBuf    ,INDICATOR_CALCULATIONS);
-   SetIndexBuffer(5,SmmaLowBuf     ,INDICATOR_CALCULATIONS);
-   SetIndexBuffer(6,TrendStateBuf  ,INDICATOR_CALCULATIONS);
+   SetIndexBuffer(4,TrendStateBuf  ,INDICATOR_CALCULATIONS);
 
    PlotIndexSetInteger(1,PLOT_ARROW,233); // up arrow   (flip to green)
    PlotIndexSetInteger(2,PLOT_ARROW,234); // down arrow (flip to red)
@@ -201,19 +201,23 @@ int OnCalculate(const int rates_total,
       if(BarsCalculated(hSmmaHigh) < rates_total ||
          BarsCalculated(hSmmaLow)  < rates_total)
          return(prev_calculated);
-      if(CopyBuffer(hSmmaHigh,0,0,rates_total,SmmaHighBuf) < rates_total)
-         return(prev_calculated);
-      if(CopyBuffer(hSmmaLow ,0,0,rates_total,SmmaLowBuf ) < rates_total)
-         return(prev_calculated);
 
       int start = (prev_calculated>0) ? prev_calculated-1 : 0;
+      int need  = rates_total - start;         // tail length to refresh this pass
+
+      //--- pull ONLY the touched SMMA tail (smH[k]/smL[k], k=i-start -> bar i)
+      double smH[], smL[];
+      if(CopyBuffer(hSmmaHigh,0,0,need,smH) < need) return(prev_calculated);
+      if(CopyBuffer(hSmmaLow ,0,0,need,smL) < need) return(prev_calculated);
+
       for(int i=start;i<rates_total;i++)
         {
+         int  k        = i - start;            // index into the tail copies
          int prevTrend = (i>0) ? (int)TrendStateBuf[i-1] : 0;
          bool doEval   = (i < rates_total-1) && (i >= per);
          int trend     = EvalTrend(prevTrend,doEval,
                                    open[i],high[i],low[i],close[i],
-                                   SmmaHighBuf[i],SmmaLowBuf[i],thr);
+                                   smH[k],smL[k],thr);
 
          TrendStateBuf[i]   = trend;
          TrendLineBuf[i]    = InpLineLevel;
@@ -237,53 +241,71 @@ int OnCalculate(const int rates_total,
                         (double)BarsCalculated(hSmmaLow)));
    if(htfN <= per+1) return(prev_calculated);
 
-   ArrayResize(hTime,htfN);   ArrayResize(hOpen,htfN);   ArrayResize(hHigh,htfN);
-   ArrayResize(hLow,htfN);    ArrayResize(hClose,htfN);
-   ArrayResize(hSmH,htfN);    ArrayResize(hSmL,htfN);
-   ArrayResize(hTrend,htfN);  ArrayResize(hLongFlip,htfN); ArrayResize(hShortFlip,htfN);
+   //--- Rebuild gate: the forming htf bar is never evaluated, so hTrend[]/
+   //    hLongFlip[]/hShortFlip[] only change when a NEW htf bar opens. Between
+   //    htf bars we skip the whole rebuild (10x ArrayResize + 7x full CopyX +
+   //    reverse loop + trend loop) and just map the incremental chart tail.
+   datetime htfNewest = iTime(_Symbol,g_tf,0);
+   bool     htfRebuilt = false;
 
-   //--- copy target-TF data (series temp, then reverse into ascending)
-   datetime tT[]; double tO[],tH[],tL[],tC[],tSH[],tSL[];
-   ArraySetAsSeries(tT,true);  ArraySetAsSeries(tO,true);  ArraySetAsSeries(tH,true);
-   ArraySetAsSeries(tL,true);  ArraySetAsSeries(tC,true);
-   ArraySetAsSeries(tSH,true); ArraySetAsSeries(tSL,true);
-
-   if(CopyTime (_Symbol,g_tf,0,htfN,tT) != htfN) return(prev_calculated);
-   if(CopyOpen (_Symbol,g_tf,0,htfN,tO) != htfN) return(prev_calculated);
-   if(CopyHigh (_Symbol,g_tf,0,htfN,tH) != htfN) return(prev_calculated);
-   if(CopyLow  (_Symbol,g_tf,0,htfN,tL) != htfN) return(prev_calculated);
-   if(CopyClose(_Symbol,g_tf,0,htfN,tC) != htfN) return(prev_calculated);
-   if(CopyBuffer(hSmmaHigh,0,0,htfN,tSH) != htfN) return(prev_calculated);
-   if(CopyBuffer(hSmmaLow ,0,0,htfN,tSL) != htfN) return(prev_calculated);
-
-   for(int k=0;k<htfN;k++)
+   if(prev_calculated<=0 || htfN!=g_htfCount || htfNewest!=g_htfNewest)
      {
-      int d = htfN-1-k; // tT[0] is the most recent bar -> last ascending index
-      hTime[d]=tT[k]; hOpen[d]=tO[k]; hHigh[d]=tH[k]; hLow[d]=tL[k]; hClose[d]=tC[k];
-      hSmH[d]=tSH[k]; hSmL[d]=tSL[k];
+      ArrayResize(hTime,htfN);   ArrayResize(hOpen,htfN);   ArrayResize(hHigh,htfN);
+      ArrayResize(hLow,htfN);    ArrayResize(hClose,htfN);
+      ArrayResize(hSmH,htfN);    ArrayResize(hSmL,htfN);
+      ArrayResize(hTrend,htfN);  ArrayResize(hLongFlip,htfN); ArrayResize(hShortFlip,htfN);
+
+      //--- copy target-TF data (series temp, then reverse into ascending)
+      datetime tT[]; double tO[],tH[],tL[],tC[],tSH[],tSL[];
+      ArraySetAsSeries(tT,true);  ArraySetAsSeries(tO,true);  ArraySetAsSeries(tH,true);
+      ArraySetAsSeries(tL,true);  ArraySetAsSeries(tC,true);
+      ArraySetAsSeries(tSH,true); ArraySetAsSeries(tSL,true);
+
+      if(CopyTime (_Symbol,g_tf,0,htfN,tT) != htfN) return(prev_calculated);
+      if(CopyOpen (_Symbol,g_tf,0,htfN,tO) != htfN) return(prev_calculated);
+      if(CopyHigh (_Symbol,g_tf,0,htfN,tH) != htfN) return(prev_calculated);
+      if(CopyLow  (_Symbol,g_tf,0,htfN,tL) != htfN) return(prev_calculated);
+      if(CopyClose(_Symbol,g_tf,0,htfN,tC) != htfN) return(prev_calculated);
+      if(CopyBuffer(hSmmaHigh,0,0,htfN,tSH) != htfN) return(prev_calculated);
+      if(CopyBuffer(hSmmaLow ,0,0,htfN,tSL) != htfN) return(prev_calculated);
+
+      for(int k=0;k<htfN;k++)
+        {
+         int d = htfN-1-k; // tT[0] is the most recent bar -> last ascending index
+         hTime[d]=tT[k]; hOpen[d]=tO[k]; hHigh[d]=tH[k]; hLow[d]=tL[k]; hClose[d]=tC[k];
+         hSmH[d]=tSH[k]; hSmL[d]=tSL[k];
+        }
+
+      //--- trend engine over target-TF bars (oldest -> newest), closed bars only
+      for(int j=0;j<htfN;j++)
+        {
+         int  prevT   = (j>0) ? (int)hTrend[j-1] : 0;
+         bool allowed = (j < htfN-1) && (j >= per);   // last htf bar is still forming
+         int  t       = EvalTrend(prevT,allowed,
+                                  hOpen[j],hHigh[j],hLow[j],hClose[j],
+                                  hSmH[j],hSmL[j],thr);
+         hTrend[j]     = t;
+         hLongFlip[j]  = (t== 1 && prevT!= 1) ? 1 : 0;
+         hShortFlip[j] = (t==-1 && prevT!=-1) ? 1 : 0;
+        }
+
+      g_htfCount  = htfN;
+      g_htfNewest = htfNewest;
+      htfRebuilt  = true;
      }
 
-   //--- trend engine over target-TF bars (oldest -> newest), closed bars only
-   for(int j=0;j<htfN;j++)
-     {
-      int  prevT   = (j>0) ? (int)hTrend[j-1] : 0;
-      bool allowed = (j < htfN-1) && (j >= per);   // last htf bar is still forming
-      int  t       = EvalTrend(prevT,allowed,
-                               hOpen[j],hHigh[j],hLow[j],hClose[j],
-                               hSmH[j],hSmL[j],thr);
-      hTrend[j]     = t;
-      hLongFlip[j]  = (t== 1 && prevT!= 1) ? 1 : 0;
-      hShortFlip[j] = (t==-1 && prevT!=-1) ? 1 : 0;
-     }
-
-   //--- map onto chart bars. Redraw the region covered by the last two
-   //    target-TF bars (a just-closed htf bar can create a new flip),
-   //    plus the normal incremental tail.
+   //--- map onto chart bars. Only when a new htf bar was just built do we
+   //    redraw the region it covers (a just-closed htf bar can create a new
+   //    flip); otherwise the cached htf trend is unchanged and we redraw only
+   //    the normal incremental chart tail.
    int start = (prev_calculated>0) ? prev_calculated-1 : 0;
-   datetime redrawFrom = hTime[MathMax(0,htfN-2)];
    int dispStart = start;
-   while(dispStart>0 && time[dispStart-1] >= redrawFrom)
-      dispStart--;
+   if(htfRebuilt)
+     {
+      datetime redrawFrom = hTime[MathMax(0,htfN-2)];
+      while(dispStart>0 && time[dispStart-1] >= redrawFrom)
+         dispStart--;
+     }
 
    int prevMapped = (dispStart>0) ? FindHtfIndex(time[dispStart-1],htfN) : -2;
 

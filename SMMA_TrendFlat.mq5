@@ -27,7 +27,7 @@
 #property version   "1.00"
 #property indicator_separate_window
 
-#property indicator_buffers 7
+#property indicator_buffers 5
 #property indicator_plots   3
 
 //--- Plot 0: Flat trend line - COLOR by trend
@@ -63,9 +63,7 @@ double TrendLineBuf[];
 double TrendLineColBuf[];
 double LongArrowBuf[];
 double ShortArrowBuf[];
-//--- Calculation buffers (persist between calls)
-double SmmaHighBuf[];
-double SmmaLowBuf[];
+//--- Calculation buffer (persists trend across calls)
 double TrendStateBuf[];
 
 //--- SMMA indicator handles
@@ -82,9 +80,7 @@ int OnInit()
    SetIndexBuffer(1,TrendLineColBuf,INDICATOR_COLOR_INDEX);
    SetIndexBuffer(2,LongArrowBuf   ,INDICATOR_DATA);
    SetIndexBuffer(3,ShortArrowBuf  ,INDICATOR_DATA);
-   SetIndexBuffer(4,SmmaHighBuf    ,INDICATOR_CALCULATIONS);
-   SetIndexBuffer(5,SmmaLowBuf     ,INDICATOR_CALCULATIONS);
-   SetIndexBuffer(6,TrendStateBuf  ,INDICATOR_CALCULATIONS);
+   SetIndexBuffer(4,TrendStateBuf  ,INDICATOR_CALCULATIONS);
 
    PlotIndexSetInteger(1,PLOT_ARROW,233); // up arrow   (flip to green)
    PlotIndexSetInteger(2,PLOT_ARROW,234); // down arrow (flip to red)
@@ -147,18 +143,20 @@ int OnCalculate(const int rates_total,
       BarsCalculated(hSmmaLow)  < rates_total)
       return(prev_calculated);
 
-   //--- pull SMMA values aligned oldest-first (non-series, like the price arrays)
-   if(CopyBuffer(hSmmaHigh,0,0,rates_total,SmmaHighBuf) < rates_total)
-      return(prev_calculated);
-   if(CopyBuffer(hSmmaLow ,0,0,rates_total,SmmaLowBuf ) < rates_total)
-      return(prev_calculated);
-
-   //--- recompute from the last confirmed bar of the previous pass
+   //--- recompute only from the last confirmed bar of the previous pass
    int    start = (prev_calculated>0) ? prev_calculated-1 : 0;
-   double thr   = InpMinBreakPips * g_pip;  // min break distance in price
+   int    need  = rates_total - start;           // tail length to refresh this pass
+   double thr   = InpMinBreakPips * g_pip;        // min break distance in price
+
+   //--- pull ONLY the touched SMMA tail (oldest-first), not the whole buffer.
+   //    smH[k]/smL[k] with k=i-start map to chart bar i (smH[need-1]=newest).
+   double smH[], smL[];
+   if(CopyBuffer(hSmmaHigh,0,0,need,smH) < need) return(prev_calculated);
+   if(CopyBuffer(hSmmaLow ,0,0,need,smL) < need) return(prev_calculated);
 
    for(int i=start;i<rates_total;i++)
      {
+      int k         = i - start;               // index into the tail copies
       int prevTrend = (i>0) ? (int)TrendStateBuf[i-1] : 0;
       int trend     = prevTrend;
 
@@ -170,9 +168,9 @@ int OnCalculate(const int rates_total,
          bool green = (close[i] > open[i]);
          bool red   = (close[i] < open[i]);
 
-         if(green && close[i] > SmmaHighBuf[i] + thr)
+         if(green && close[i] > smH[k] + thr)
             trend = 1;                       // bullish break: close exceeds SMMA(High) by >= thr
-         else if(red && close[i] < SmmaLowBuf[i] - thr)
+         else if(red && close[i] < smL[k] - thr)
             trend = -1;                      // bearish break: close below SMMA(Low) by >= thr
          // otherwise: hold the previous trend (flat continuation)
         }
