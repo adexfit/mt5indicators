@@ -1,0 +1,56 @@
+//@version=6
+indicator("Spearman Rank Correlation Histogram", shorttitle="SRCC Histogram", overlay=false, precision=2)
+
+length = input.int(14, "Range", minval=2, maxval=500)
+maxRangeInput = input.int(30, "Maximum range", minval=0, maxval=500,
+     tooltip="No values are plotted when Range exceeds this limit. A value of 0 uses 10, matching the MQL5 indicator.")
+source = input.source(close, "Source")
+descendingRanks = input.bool(true, "Rank highest price first")
+highLevel = input.float(0.8, "High level", minval=-1.0, maxval=1.0, step=0.05)
+lowLevel = input.float(-0.8, "Low level", minval=-1.0, maxval=1.0, step=0.05)
+
+spearmanRankCorrelation(float src, int count, bool descending) =>
+    values = array.new_int(count)
+    for i = 0 to count - 1
+        // Integer ticks reproduce the symbol-precision comparison used by MQL5.
+        array.set(values, i, int(math.round(src[i] / syminfo.mintick)))
+
+    sortedValues = array.copy(values)
+    array.sort(sortedValues, descending ? order.descending : order.ascending)
+
+    sortedRanks = array.new_float(count)
+    groupStart = 0
+    while groupStart < count
+        groupEnd = groupStart + 1
+        while groupEnd < count and array.get(sortedValues, groupEnd) == array.get(sortedValues, groupStart)
+            groupEnd += 1
+
+        // Tied observations receive the average of their one-based ranks.
+        averageRank = (groupStart + groupEnd + 1.0) / 2.0
+        for i = groupStart to groupEnd - 1
+            array.set(sortedRanks, i, averageRank)
+        groupStart := groupEnd
+
+    squaredRankDifference = 0.0
+    for i = 0 to count - 1
+        sortedIndex = array.indexof(sortedValues, array.get(values, i))
+        rankDifference = array.get(sortedRanks, sortedIndex) - (i + 1.0)
+        squaredRankDifference += rankDifference * rankDifference
+
+    1.0 - 6.0 * squaredRankDifference / (count * count * count - count)
+
+maxRange = maxRangeInput <= 0 ? 10 : maxRangeInput
+srcc = length <= maxRange and bar_index >= length - 1 ? spearmanRankCorrelation(source, length, descendingRanks) : na
+
+histogramColor = srcc > 0 ? (srcc > highLevel ? color.rgb(30, 144, 255) : color.blue) :
+                 srcc < 0 ? (srcc < lowLevel ? color.fuchsia : color.purple) : color.gray
+
+plot(srcc, "SRCC", color=histogramColor, linewidth=2, style=plot.style_histogram, histbase=0)
+
+hline(highLevel, "High level", color=color.fuchsia, linestyle=hline.style_dashed)
+hline(0, "Zero", color=color.gray, linestyle=hline.style_dashed)
+hline(lowLevel, "Low level", color=color.blue, linestyle=hline.style_dashed)
+
+// Transparent bounds retain the fixed MQL5 indicator scale.
+plot(1, "Upper scale bound", color=color.new(color.white, 100), editable=false)
+plot(-1, "Lower scale bound", color=color.new(color.white, 100), editable=false)

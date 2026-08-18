@@ -1,0 +1,256 @@
+//@version=6
+indicator("TMA Band + SRCC + Forex Sessions", shorttitle="TMA+SRCC", overlay=false, precision=2, behind_chart=true, max_boxes_count=500, max_labels_count=500)
+
+const string TMA_GROUP = "TMA Band"
+const string TMA_SIGNAL_GROUP = "TMA Signals"
+const string SRCC_GROUP = "SRCC Histogram"
+const string SESSION_TIME_GROUP = "Sessions: Time Alignment"
+const string SESSION_HOURS_GROUP = "Sessions: Hours (0-23)"
+const string SESSION_APPEARANCE_GROUP = "Sessions: Appearance"
+const string SESSION_LABEL_GROUP = "Sessions: Labels"
+const string SESSION_HOUSEKEEPING_GROUP = "Sessions: Housekeeping"
+
+// TMA Band
+tmaBandMode = input.string("ATR", "Band type", options=["ATR", "Standard deviation", "Fixed points"], group=TMA_GROUP)
+tmaStdDevPeriod = input.int(100, "Standard deviation period", minval=1, group=TMA_GROUP)
+tmaStdDevMultiplier = input.float(2.0, "Standard deviation multiplier", minval=0.0, group=TMA_GROUP)
+tmaFixedBandPoints = input.float(50.0, "Fixed band points", minval=0.0, group=TMA_GROUP)
+tmaHalfLength = input.int(600, "TMA half period", minval=0, group=TMA_GROUP)
+tmaPriceMode = input.string("Weighted", "Price", options=["Close", "Open", "High", "Low", "Median", "Typical", "Weighted", "Average", "HA close", "HA open", "HA high", "HA low", "HA median", "HA typical", "HA weighted", "HA average"], group=TMA_GROUP)
+tmaAtrPeriod = input.int(100, "ATR period", minval=1, group=TMA_GROUP)
+tmaAtrMultiplier = input.float(2.0, "ATR multiplier", minval=0.0, group=TMA_GROUP)
+tmaUseBuiltInAtr = input.bool(false, "Use built-in ATR", group=TMA_GROUP)
+tmaAngle = input.int(4, "TMA angle caution (points)", minval=0, group=TMA_SIGNAL_GROUP)
+tmaShowReboundArrows = input.bool(false, "Show rebound arrows", group=TMA_SIGNAL_GROUP)
+tmaShowCautionArrows = input.bool(false, "Show caution arrows", group=TMA_SIGNAL_GROUP)
+
+tmaHaClose = (open + high + low + close) / 4.0
+var float tmaHaOpen = na
+tmaHaOpen := bar_index > 0 ? (tmaHaOpen[1] + tmaHaClose[1]) / 2.0 : open + close
+tmaHaHigh = math.max(high, math.max(tmaHaOpen, tmaHaClose))
+tmaHaLow = math.min(low, math.min(tmaHaOpen, tmaHaClose))
+
+float tmaSource = switch tmaPriceMode
+    "Close"       => close
+    "Open"        => open
+    "High"        => high
+    "Low"         => low
+    "Median"      => (high + low) / 2.0
+    "Typical"     => (high + low + close) / 3.0
+    "Weighted"    => (high + low + 2.0 * close) / 4.0
+    "Average"     => (high + low + close + open) / 4.0
+    "HA close"    => tmaHaClose
+    "HA open"     => tmaHaOpen
+    "HA high"     => tmaHaHigh
+    "HA low"      => tmaHaLow
+    "HA median"   => (tmaHaHigh + tmaHaLow) / 2.0
+    "HA typical"  => (tmaHaHigh + tmaHaLow + tmaHaClose) / 3.0
+    "HA weighted" => (tmaHaHigh + tmaHaLow + 2.0 * tmaHaClose) / 4.0
+    => (tmaHaHigh + tmaHaLow + tmaHaClose + tmaHaOpen) / 4.0
+
+tmaPeriod = tmaHalfLength + 1
+var float tmaSourceSum = 0.0
+var float tmaWeightedSum = 0.0
+tmaPreviousSourceSum = nz(tmaSourceSum[1])
+tmaSourceSum := tmaPreviousSourceSum + tmaSource - nz(tmaSource[tmaPeriod])
+tmaWeightedSum := nz(tmaWeightedSum[1]) + tmaPeriod * tmaSource - tmaPreviousSourceSum
+tmaSampleCount = math.min(bar_index + 1, tmaPeriod)
+tmaWeightSum = tmaSampleCount * (2.0 * tmaPeriod - tmaSampleCount + 1.0) / 2.0
+tmaValue = tmaWeightedSum / tmaWeightSum
+
+tmaManualRange = bar_index >= 11 ? math.max(high[10], close[11]) - math.min(low[10], close[11]) : 0.0
+var float tmaManualRangeSum = 0.0
+tmaManualRangeSum := nz(tmaManualRangeSum[1]) + tmaManualRange - nz(tmaManualRange[tmaAtrPeriod])
+tmaManualAtr = tmaManualRangeSum / tmaAtrPeriod
+tmaAtrValue = tmaUseBuiltInAtr ? ta.atr(tmaAtrPeriod) : tmaManualAtr
+tmaStdDev = bar_index < tmaStdDevPeriod - 1 ? 0.0 : ta.stdev(tmaSource, tmaStdDevPeriod, true)
+tmaBandWidth = switch tmaBandMode
+    "ATR"                => tmaAtrValue * tmaAtrMultiplier
+    "Standard deviation" => tmaStdDev * tmaStdDevMultiplier
+    => tmaFixedBandPoints * syminfo.mintick
+
+tmaUpperBand = tmaValue + tmaBandWidth
+tmaLowerBand = tmaValue - tmaBandWidth
+var int tmaTrendState = 0
+tmaTrendState := tmaValue > tmaValue[1] ? 1 : tmaValue < tmaValue[1] ? -1 : nz(tmaTrendState[1])
+tmaColor = tmaTrendState >= 0 ? color.rgb(135, 206, 250) : color.rgb(255, 182, 193)
+
+plot(tmaValue, "Centered TMA", color=tmaColor, linewidth=2, force_overlay=true)
+plot(tmaUpperBand, "Centered TMA upper band", color=color.rgb(135, 206, 250), force_overlay=true)
+plot(tmaLowerBand, "Centered TMA lower band", color=color.rgb(255, 182, 193), force_overlay=true)
+plot(tmaTrendState, "Trend State", display=display.none)
+
+tmaReboundDown = high[1] > tmaUpperBand[1] and close[1] > open[1] and close < open
+tmaReboundUp = low[1] < tmaLowerBand[1] and close[1] < open[1] and close > open
+tmaCautionDown = tmaReboundDown and tmaValue - tmaValue[1] > tmaAngle * syminfo.mintick
+tmaCautionUp = tmaReboundUp and tmaValue[1] - tmaValue > tmaAngle * syminfo.mintick
+tmaReboundDownLevel = tmaShowReboundArrows and tmaReboundDown ? high + tmaBandWidth / 2.0 : na
+tmaReboundUpLevel = tmaShowReboundArrows and tmaReboundUp ? low - tmaBandWidth / 2.0 : na
+tmaCautionAtr = tmaBandMode == "ATR" ? tmaAtrValue : 0.0
+tmaCautionLevel = tmaShowCautionArrows and tmaCautionDown ? high + tmaAtrMultiplier * tmaCautionAtr / 2.0 + 10.0 * syminfo.mintick : tmaShowCautionArrows and tmaCautionUp ? low - tmaAtrMultiplier * tmaCautionAtr / 2.0 - 10.0 * syminfo.mintick : na
+
+plotshape(tmaReboundDownLevel, title="Rebound down", style=shape.triangledown, location=location.absolute, color=color.rgb(255, 182, 193), size=size.tiny, force_overlay=true)
+plotshape(tmaReboundUpLevel, title="Rebound up", style=shape.triangleup, location=location.absolute, color=color.rgb(135, 206, 250), size=size.tiny, force_overlay=true)
+plotshape(tmaCautionLevel, title="TMA angle caution", style=shape.xcross, location=location.absolute, color=color.rgb(255, 215, 0), size=size.small, force_overlay=true)
+
+alertcondition(tmaReboundDown, "TMA rebound down", "TMA Band rebound down on {{ticker}} {{interval}}")
+alertcondition(tmaReboundUp, "TMA rebound up", "TMA Band rebound up on {{ticker}} {{interval}}")
+alertcondition(tmaCautionDown or tmaCautionUp, "TMA angle caution", "TMA Band angle caution on {{ticker}} {{interval}}")
+
+// Spearman Rank Correlation Histogram
+srccLength = input.int(14, "Range", minval=2, maxval=500, group=SRCC_GROUP)
+srccMaxRangeInput = input.int(30, "Maximum range", minval=0, maxval=500, group=SRCC_GROUP,
+     tooltip="No values are plotted when Range exceeds this limit. A value of 0 uses 10, matching the MQL5 indicator.")
+srccSource = input.source(close, "Source", group=SRCC_GROUP)
+srccDescendingRanks = input.bool(true, "Rank highest price first", group=SRCC_GROUP)
+srccHighLevel = input.float(0.8, "High level", minval=-1.0, maxval=1.0, step=0.05, group=SRCC_GROUP)
+srccLowLevel = input.float(-0.8, "Low level", minval=-1.0, maxval=1.0, step=0.05, group=SRCC_GROUP)
+
+spearmanRankCorrelation(float src, int count, bool descending) =>
+    values = array.new_int(count)
+    for i = 0 to count - 1
+        array.set(values, i, int(math.round(src[i] / syminfo.mintick)))
+
+    sortedValues = array.copy(values)
+    array.sort(sortedValues, descending ? order.descending : order.ascending)
+    sortedRanks = array.new_float(count)
+    groupStart = 0
+    while groupStart < count
+        groupEnd = groupStart + 1
+        while groupEnd < count and array.get(sortedValues, groupEnd) == array.get(sortedValues, groupStart)
+            groupEnd += 1
+        averageRank = (groupStart + groupEnd + 1.0) / 2.0
+        for i = groupStart to groupEnd - 1
+            array.set(sortedRanks, i, averageRank)
+        groupStart := groupEnd
+
+    squaredRankDifference = 0.0
+    for i = 0 to count - 1
+        sortedIndex = array.indexof(sortedValues, array.get(values, i))
+        rankDifference = array.get(sortedRanks, sortedIndex) - (i + 1.0)
+        squaredRankDifference += rankDifference * rankDifference
+    1.0 - 6.0 * squaredRankDifference / (count * count * count - count)
+
+srccMaxRange = srccMaxRangeInput <= 0 ? 10 : srccMaxRangeInput
+srccValue = srccLength <= srccMaxRange and bar_index >= srccLength - 1 ? spearmanRankCorrelation(srccSource, srccLength, srccDescendingRanks) : na
+srccHistogramColor = srccValue > 0 ? (srccValue > srccHighLevel ? color.rgb(30, 144, 255) : color.blue) :
+     srccValue < 0 ? (srccValue < srccLowLevel ? color.fuchsia : color.purple) : color.gray
+
+plot(srccValue, "SRCC", color=srccHistogramColor, linewidth=2, style=plot.style_histogram, histbase=0)
+hline(srccHighLevel, "High level", color=color.fuchsia, linestyle=hline.style_dashed)
+hline(0, "Zero", color=color.gray, linestyle=hline.style_dashed)
+hline(srccLowLevel, "Low level", color=color.blue, linestyle=hline.style_dashed)
+plot(1, "Upper scale bound", color=color.new(color.white, 100), editable=false)
+plot(-1, "Lower scale bound", color=color.new(color.white, 100), editable=false)
+
+// Forex Session Background
+sessionTimezone = input.string("Etc/UTC", "Session timezone", group=SESSION_TIME_GROUP,
+     tooltip="IANA timezone used to interpret the session hours. Etc/UTC matches the UTC hours in the MQL5 indicator.")
+asianStartHour = input.int(23, "Asian start", minval=0, maxval=23, group=SESSION_HOURS_GROUP)
+asianEndHour = input.int(8, "Asian end", minval=0, maxval=23, group=SESSION_HOURS_GROUP)
+londonStartHour = input.int(7, "London start", minval=0, maxval=23, group=SESSION_HOURS_GROUP)
+londonEndHour = input.int(16, "London end", minval=0, maxval=23, group=SESSION_HOURS_GROUP)
+newYorkStartHour = input.int(12, "New York start", minval=0, maxval=23, group=SESSION_HOURS_GROUP)
+newYorkEndHour = input.int(21, "New York end", minval=0, maxval=23, group=SESSION_HOURS_GROUP)
+
+sessionDisplayMode = input.string("Filled", "Display mode", options=["Filled", "Border only"], group=SESSION_APPEARANCE_GROUP)
+asianColor = input.color(color.rgb(219, 234, 254), "Asian fill", group=SESSION_APPEARANCE_GROUP)
+londonColor = input.color(color.rgb(220, 242, 229), "London fill", group=SESSION_APPEARANCE_GROUP)
+newYorkColor = input.color(color.rgb(254, 235, 200), "New York fill", group=SESSION_APPEARANCE_GROUP)
+asianBorderColor = input.color(color.rgb(37, 99, 180), "Asian border", group=SESSION_APPEARANCE_GROUP)
+londonBorderColor = input.color(color.rgb(35, 120, 78), "London border", group=SESSION_APPEARANCE_GROUP)
+newYorkBorderColor = input.color(color.rgb(194, 110, 14), "New York border", group=SESSION_APPEARANCE_GROUP)
+sessionFillTransparency = input.int(85, "Fill transparency", minval=0, maxval=100, group=SESSION_APPEARANCE_GROUP)
+sessionBorderWidth = input.int(1, "Border width", minval=1, maxval=5, group=SESSION_APPEARANCE_GROUP)
+sessionVerticalPaddingPct = input.float(3.0, "Vertical padding (%)", minval=0.0, step=0.25, group=SESSION_APPEARANCE_GROUP)
+sessionShowLabels = input.bool(true, "Show session labels", group=SESSION_LABEL_GROUP)
+sessionLabelTextColor = input.color(color.rgb(31, 41, 55), "Label text", group=SESSION_LABEL_GROUP)
+sessionLabelTransparency = input.int(0, "Label transparency", minval=0, maxval=100, group=SESSION_LABEL_GROUP)
+sessionMaxBlocks = input.int(300, "Maximum session blocks", minval=1, maxval=500, group=SESSION_HOUSEKEEPING_GROUP,
+     tooltip="The oldest boxes and labels are deleted after this limit is reached.")
+
+inHourRange(int currentHour, int startHour, int endHour) =>
+    startHour == endHour ? false : startHour < endHour ? currentHour >= startHour and currentHour < endHour : currentHour >= startHour or currentHour < endHour
+
+getSession(int barTime) =>
+    sessionHour = hour(barTime, sessionTimezone)
+    inHourRange(sessionHour, asianStartHour, asianEndHour) ? 0 :
+     inHourRange(sessionHour, londonStartHour, londonEndHour) ? 1 :
+     inHourRange(sessionHour, newYorkStartHour, newYorkEndHour) ? 2 : -1
+
+getSessionName(int sessionId) =>
+    switch sessionId
+        0 => "Asian"
+        1 => "London"
+        2 => "New York"
+        => ""
+
+getSessionFillColor(int sessionId) =>
+    switch sessionId
+        0 => asianColor
+        1 => londonColor
+        2 => newYorkColor
+        => color.gray
+
+getSessionBorderColor(int sessionId) =>
+    switch sessionId
+        0 => asianBorderColor
+        1 => londonBorderColor
+        2 => newYorkBorderColor
+        => color.gray
+
+var box[] sessionBoxes = array.new_box()
+var label[] sessionLabels = array.new_label()
+var int previousSession = na
+var int sessionBlockStart = na
+var float sessionBlockHigh = na
+var float sessionBlockLow = na
+var box currentSessionBox = na
+var label currentSessionLabel = na
+
+sessionId = getSession(time)
+sessionChanged = na(previousSession) or sessionId != previousSession
+sessionBarRightTime = na(time_close) ? time : time_close
+
+if sessionChanged
+    sessionBlockStart := time
+    sessionBlockHigh := high
+    sessionBlockLow := low
+    currentSessionBox := na
+    currentSessionLabel := na
+
+    if sessionId >= 0
+        if array.size(sessionBoxes) >= sessionMaxBlocks
+            box.delete(array.shift(sessionBoxes))
+        if sessionShowLabels and array.size(sessionLabels) >= sessionMaxBlocks
+            label.delete(array.shift(sessionLabels))
+
+        sessionFill = sessionDisplayMode == "Filled" ? color.new(getSessionFillColor(sessionId), sessionFillTransparency) : color.new(getSessionFillColor(sessionId), 100)
+        sessionBorder = getSessionBorderColor(sessionId)
+        currentSessionBox := box.new(left=sessionBlockStart, top=sessionBlockHigh, right=sessionBarRightTime, bottom=sessionBlockLow,
+             xloc=xloc.bar_time, border_color=sessionBorder, border_width=sessionDisplayMode == "Border only" ? sessionBorderWidth : 1,
+             bgcolor=sessionFill, force_overlay=true)
+        array.push(sessionBoxes, currentSessionBox)
+
+        if sessionShowLabels
+            currentSessionLabel := label.new(x=sessionBlockStart, y=sessionBlockHigh, text=getSessionName(sessionId), xloc=xloc.bar_time,
+                 style=label.style_label_down, color=color.new(getSessionFillColor(sessionId), sessionLabelTransparency),
+                 textcolor=sessionLabelTextColor, size=size.small, force_overlay=true)
+            array.push(sessionLabels, currentSessionLabel)
+
+    previousSession := sessionId
+else if sessionId >= 0
+    sessionBlockHigh := math.max(sessionBlockHigh, high)
+    sessionBlockLow := math.min(sessionBlockLow, low)
+
+if sessionId >= 0 and not na(currentSessionBox)
+    sessionRange = sessionBlockHigh - sessionBlockLow
+    sessionVerticalPadding = sessionRange * sessionVerticalPaddingPct / 100.0
+    sessionPaddedHigh = sessionBlockHigh + sessionVerticalPadding
+    sessionPaddedLow = sessionBlockLow - sessionVerticalPadding
+    box.set_lefttop(currentSessionBox, sessionBlockStart, sessionPaddedHigh)
+    box.set_rightbottom(currentSessionBox, sessionBarRightTime, sessionPaddedLow)
+
+    if sessionShowLabels and not na(currentSessionLabel)
+        label.set_x(currentSessionLabel, sessionBlockStart + int((sessionBarRightTime - sessionBlockStart) / 2))
+        label.set_y(currentSessionLabel, sessionPaddedHigh)

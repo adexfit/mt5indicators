@@ -1,0 +1,125 @@
+//@version=6
+indicator("Forex Session Background", shorttitle="Session BG", overlay=true, max_boxes_count=500, max_labels_count=500)
+
+const string TIME_GROUP = "Session Time Alignment"
+const string HOURS_GROUP = "Session Hours (0-23)"
+const string APPEARANCE_GROUP = "Appearance"
+const string LABEL_GROUP = "Labels"
+const string HOUSEKEEPING_GROUP = "Housekeeping"
+
+sessionTimezone = input.string("Etc/UTC", "Session timezone", group=TIME_GROUP,
+     tooltip="IANA timezone used to interpret the session hours. Etc/UTC matches the UTC hours in the MQL5 indicator.")
+
+asianStartHour = input.int(23, "Asian start", minval=0, maxval=23, group=HOURS_GROUP)
+asianEndHour = input.int(8, "Asian end", minval=0, maxval=23, group=HOURS_GROUP)
+londonStartHour = input.int(7, "London start", minval=0, maxval=23, group=HOURS_GROUP)
+londonEndHour = input.int(16, "London end", minval=0, maxval=23, group=HOURS_GROUP)
+newYorkStartHour = input.int(12, "New York start", minval=0, maxval=23, group=HOURS_GROUP)
+newYorkEndHour = input.int(21, "New York end", minval=0, maxval=23, group=HOURS_GROUP)
+
+displayMode = input.string("Filled", "Display mode", options=["Filled", "Border only"], group=APPEARANCE_GROUP)
+asianColor = input.color(color.rgb(219, 234, 254), "Asian fill", group=APPEARANCE_GROUP)
+londonColor = input.color(color.rgb(220, 242, 229), "London fill", group=APPEARANCE_GROUP)
+newYorkColor = input.color(color.rgb(254, 235, 200), "New York fill", group=APPEARANCE_GROUP)
+asianBorderColor = input.color(color.rgb(37, 99, 180), "Asian border", group=APPEARANCE_GROUP)
+londonBorderColor = input.color(color.rgb(35, 120, 78), "London border", group=APPEARANCE_GROUP)
+newYorkBorderColor = input.color(color.rgb(194, 110, 14), "New York border", group=APPEARANCE_GROUP)
+fillTransparency = input.int(30, "Fill transparency", minval=0, maxval=100, group=APPEARANCE_GROUP)
+borderWidth = input.int(1, "Border width", minval=1, maxval=5, group=APPEARANCE_GROUP)
+verticalPaddingPct = input.float(3.0, "Vertical padding (%)", minval=0.0, step=0.25, group=APPEARANCE_GROUP)
+
+showLabels = input.bool(true, "Show session labels", group=LABEL_GROUP)
+labelTextColor = input.color(color.rgb(31, 41, 55), "Label text", group=LABEL_GROUP)
+labelTransparency = input.int(0, "Label transparency", minval=0, maxval=100, group=LABEL_GROUP)
+
+maxSessions = input.int(300, "Maximum session blocks", minval=1, maxval=500, group=HOUSEKEEPING_GROUP,
+     tooltip="The oldest boxes and labels are deleted after this limit is reached.")
+
+inHourRange(int currentHour, int startHour, int endHour) =>
+    startHour == endHour ? false :
+     startHour < endHour ? currentHour >= startHour and currentHour < endHour :
+     currentHour >= startHour or currentHour < endHour
+
+getSession(int barTime) =>
+    sessionHour = hour(barTime, sessionTimezone)
+    // Match the MQL5 overlap priority: Asian, then London, then New York.
+    inHourRange(sessionHour, asianStartHour, asianEndHour) ? 0 :
+     inHourRange(sessionHour, londonStartHour, londonEndHour) ? 1 :
+     inHourRange(sessionHour, newYorkStartHour, newYorkEndHour) ? 2 : -1
+
+getSessionName(int sessionId) =>
+    switch sessionId
+        0 => "Asian"
+        1 => "London"
+        2 => "New York"
+        => ""
+
+getFillColor(int sessionId) =>
+    switch sessionId
+        0 => asianColor
+        1 => londonColor
+        2 => newYorkColor
+        => color.gray
+
+getBorderColor(int sessionId) =>
+    switch sessionId
+        0 => asianBorderColor
+        1 => londonBorderColor
+        2 => newYorkBorderColor
+        => color.gray
+
+var box[] sessionBoxes = array.new_box()
+var label[] sessionLabels = array.new_label()
+var int previousSession = na
+var int blockStart = na
+var float blockHigh = na
+var float blockLow = na
+var box currentBox = na
+var label currentLabel = na
+
+sessionId = getSession(time)
+sessionChanged = na(previousSession) or sessionId != previousSession
+barRightTime = na(time_close) ? time : time_close
+
+if sessionChanged
+    blockStart := time
+    blockHigh := high
+    blockLow := low
+    currentBox := na
+    currentLabel := na
+
+    if sessionId >= 0
+        if array.size(sessionBoxes) >= maxSessions
+            box.delete(array.shift(sessionBoxes))
+        if showLabels and array.size(sessionLabels) >= maxSessions
+            label.delete(array.shift(sessionLabels))
+
+        sessionFill = displayMode == "Filled" ? color.new(getFillColor(sessionId), fillTransparency) : color.new(getFillColor(sessionId), 100)
+        sessionBorder = getBorderColor(sessionId)
+        currentBox := box.new(left=blockStart, top=blockHigh, right=barRightTime, bottom=blockLow,
+             xloc=xloc.bar_time, border_color=sessionBorder, border_width=displayMode == "Border only" ? borderWidth : 1,
+             bgcolor=sessionFill)
+        array.push(sessionBoxes, currentBox)
+
+        if showLabels
+            currentLabel := label.new(x=blockStart, y=blockHigh, text=getSessionName(sessionId), xloc=xloc.bar_time,
+                 style=label.style_label_down, color=color.new(getFillColor(sessionId), labelTransparency),
+                 textcolor=labelTextColor, size=size.small)
+            array.push(sessionLabels, currentLabel)
+
+    previousSession := sessionId
+else if sessionId >= 0
+    blockHigh := math.max(blockHigh, high)
+    blockLow := math.min(blockLow, low)
+
+if sessionId >= 0 and not na(currentBox)
+    sessionRange = blockHigh - blockLow
+    verticalPadding = sessionRange * verticalPaddingPct / 100.0
+    paddedHigh = blockHigh + verticalPadding
+    paddedLow = blockLow - verticalPadding
+    box.set_lefttop(currentBox, blockStart, paddedHigh)
+    box.set_rightbottom(currentBox, barRightTime, paddedLow)
+
+    if showLabels and not na(currentLabel)
+        label.set_x(currentLabel, blockStart + int((barRightTime - blockStart) / 2))
+        label.set_y(currentLabel, paddedHigh)

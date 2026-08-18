@@ -1,0 +1,98 @@
+//@version=6
+indicator("TMA Band (MQL5 conversion)", shorttitle="TMA Band", overlay=true)
+
+// Inputs
+bandMode = input.string("ATR", "Band type", options=["ATR", "Standard deviation", "Fixed points"])
+stdDevPeriod = input.int(100, "Standard deviation period", minval=1)
+stdDevMultiplier = input.float(2.0, "Standard deviation multiplier", minval=0.0)
+fixedBandPoints = input.float(50.0, "Fixed band points", minval=0.0)
+halfLength = input.int(600, "TMA half period", minval=0)
+priceMode = input.string("Weighted", "Price", options=["Close", "Open", "High", "Low", "Median", "Typical", "Weighted", "Average", "HA close", "HA open", "HA high", "HA low", "HA median", "HA typical", "HA weighted", "HA average"])
+atrPeriod = input.int(100, "ATR period", minval=1)
+atrMultiplier = input.float(2.0, "ATR multiplier", minval=0.0)
+tmaAngle = input.int(4, "TMA angle caution (points)", minval=0)
+showReboundArrows = input.bool(false, "Show rebound arrows")
+showCautionArrows = input.bool(false, "Show caution arrows")
+useBuiltInAtr = input.bool(false, "Use built-in ATR")
+
+// The MQL5 implementation uses a nonstandard initial HA open, so it is
+// reproduced here rather than requesting TradingView's Heikin-Ashi symbol.
+haClose = (open + high + low + close) / 4.0
+var float haOpen = na
+haOpen := bar_index > 0 ? (haOpen[1] + haClose[1]) / 2.0 : open + close
+haHigh = math.max(high, math.max(haOpen, haClose))
+haLow = math.min(low, math.min(haOpen, haClose))
+
+float source = switch priceMode
+    "Close"       => close
+    "Open"        => open
+    "High"        => high
+    "Low"         => low
+    "Median"      => (high + low) / 2.0
+    "Typical"     => (high + low + close) / 3.0
+    "Weighted"    => (high + low + 2.0 * close) / 4.0
+    "Average"     => (high + low + close + open) / 4.0
+    "HA close"    => haClose
+    "HA open"     => haOpen
+    "HA high"     => haHigh
+    "HA low"      => haLow
+    "HA median"   => (haHigh + haLow) / 2.0
+    "HA typical"  => (haHigh + haLow + haClose) / 3.0
+    "HA weighted" => (haHigh + haLow + 2.0 * haClose) / 4.0
+    => (haHigh + haLow + haClose + haOpen) / 4.0
+
+// Causal linearly weighted average. During warm-up, the newest sample keeps
+// weight n, matching the MQL5 implementation instead of returning na.
+n = halfLength + 1
+var float sourceSum = 0.0
+var float weightedSum = 0.0
+previousSourceSum = nz(sourceSum[1])
+sourceSum := previousSourceSum + source - nz(source[n])
+weightedSum := nz(weightedSum[1]) + n * source - previousSourceSum
+sampleCount = math.min(bar_index + 1, n)
+weightSum = sampleCount * (2.0 * n - sampleCount + 1.0) / 2.0
+tma = weightedSum / weightSum
+
+// The compatibility ATR reproduces the source's shifted range term and its
+// fixed-period divisor during warm-up.
+manualRange = bar_index >= 11 ? math.max(high[10], close[11]) - math.min(low[10], close[11]) : 0.0
+var float manualRangeSum = 0.0
+manualRangeSum := nz(manualRangeSum[1]) + manualRange - nz(manualRange[atrPeriod])
+manualAtr = manualRangeSum / atrPeriod
+atrValue = useBuiltInAtr ? ta.atr(atrPeriod) : manualAtr
+
+stdDev = bar_index < stdDevPeriod - 1 ? 0.0 : ta.stdev(source, stdDevPeriod, true)
+bandWidth = switch bandMode
+    "ATR"                => atrValue * atrMultiplier
+    "Standard deviation" => stdDev * stdDevMultiplier
+    => fixedBandPoints * syminfo.mintick
+
+upperBand = tma + bandWidth
+lowerBand = tma - bandWidth
+
+var int trendState = 0
+trendState := tma > tma[1] ? 1 : tma < tma[1] ? -1 : nz(trendState[1])
+tmaColor = trendState >= 0 ? color.rgb(135, 206, 250) : color.rgb(255, 182, 193)
+
+plot(tma, "Centered TMA", color=tmaColor, linewidth=2)
+plot(upperBand, "Centered TMA upper band", color=color.rgb(135, 206, 250))
+plot(lowerBand, "Centered TMA lower band", color=color.rgb(255, 182, 193))
+plot(trendState, "Trend State", display=display.none)
+
+reboundDown = high[1] > upperBand[1] and close[1] > open[1] and close < open
+reboundUp = low[1] < lowerBand[1] and close[1] < open[1] and close > open
+cautionDown = reboundDown and tma - tma[1] > tmaAngle * syminfo.mintick
+cautionUp = reboundUp and tma[1] - tma > tmaAngle * syminfo.mintick
+
+reboundDownLevel = showReboundArrows and reboundDown ? high + bandWidth / 2.0 : na
+reboundUpLevel = showReboundArrows and reboundUp ? low - bandWidth / 2.0 : na
+cautionAtr = bandMode == "ATR" ? atrValue : 0.0
+cautionLevel = showCautionArrows and cautionDown ? high + atrMultiplier * cautionAtr / 2.0 + 10.0 * syminfo.mintick : showCautionArrows and cautionUp ? low - atrMultiplier * cautionAtr / 2.0 - 10.0 * syminfo.mintick : na
+
+plotshape(reboundDownLevel, title="Rebound down", style=shape.triangledown, location=location.absolute, color=color.rgb(255, 182, 193), size=size.tiny)
+plotshape(reboundUpLevel, title="Rebound up", style=shape.triangleup, location=location.absolute, color=color.rgb(135, 206, 250), size=size.tiny)
+plotshape(cautionLevel, title="TMA angle caution", style=shape.xcross, location=location.absolute, color=color.rgb(255, 215, 0), size=size.small)
+
+alertcondition(reboundDown, "TMA rebound down", "TMA Band rebound down on {{ticker}} {{interval}}")
+alertcondition(reboundUp, "TMA rebound up", "TMA Band rebound up on {{ticker}} {{interval}}")
+alertcondition(cautionDown or cautionUp, "TMA angle caution", "TMA Band angle caution on {{ticker}} {{interval}}")
