@@ -53,6 +53,7 @@ input double  differenceThreshold  = 0.0;
 input double  levelCrossValue      = 2.0;
 input int     SlopeMAPeriod        = 7;
 input int     SlopeATRPeriod       = 50;
+input bool    useFormingCandles     = true; // false = confirmed candles only (non-repainting)
 input string  spac754              = "---- Send Alerts ----";
 input bool    sendCrossAlerts      = true;
 input bool    sendLevelCrossAlerts = true;
@@ -524,7 +525,7 @@ void ShowCurrencyTable(ENUM_TIMEFRAMES tf, int column, int rightBar2)
    if(OkToSendAlerts)
    {
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      int ai = 0;
+      int ai = (useFormingCandles ? 0 : 1);
       if(sendCrossAlerts)
       {
          if(Slope1[ai+1] < differenceThreshold*0.5 && Slope1[ai] > differenceThreshold*0.5)
@@ -796,7 +797,17 @@ int OnCalculate(const int rates_total,
        for(int i=calculationLeft; i>=0; i--)
        {
           //--- ====== SLOPE + SIGNALS for every bar ======
-         int bar = MyBarShift(_Symbol, userTimeFrame, time[i]);
+         datetime signalTime = time[i];
+         if(!useFormingCandles)
+         {
+            // At a historical bar's close, time[i-1] is the exact opening
+            // time of the next chart bar.  Shift once more from the candle
+            // containing that time to select the last fully closed TF candle.
+            signalTime = (i>0 ? time[i-1] : TimeCurrent());
+         }
+
+         int bar = MyBarShift(_Symbol, userTimeFrame, signalTime);
+         if(!useFormingCandles) bar++;
          int shiftWithoutSunday = bar;
          if(_BrokerHasSundayCandles && Period()==PERIOD_D1)
             if(MyTimeDayOfWeek(iTime(_Symbol, PERIOD_D1, bar))==0)
@@ -867,10 +878,11 @@ int OnCalculate(const int rates_total,
             //--- Tables at rightBar
             if(i==rightBar)
             {
+               int tableShift = rightBar + (useFormingCandles ? 0 : 1);
                if(userNoOfTimeFrames>1 || (sendMTFAgreeAlerts && rightBar==0))
-                  Slope_2 = GetSlope(hMA_extraTF, hATR_extraTF, userExtraTimeFrame, rightBar);
+                  Slope_2 = GetSlope(hMA_extraTF, hATR_extraTF, userExtraTimeFrame, tableShift);
                if(userNoOfTimeFrames>2 || (sendMTFAgreeAlerts && rightBar==0))
-                  Slope_3 = GetSlope(hMA_extraTF2, hATR_extraTF2, userExtraTimeFrame2, rightBar);
+                  Slope_3 = GetSlope(hMA_extraTF2, hATR_extraTF2, userExtraTimeFrame2, tableShift);
 
                if(userNoOfTimeFrames==1)
                { ShowCurrencyTable(userTimeFrame,1,rightBar); ShowCurrencyTable(userTimeFrame,4,rightBar); }
@@ -918,11 +930,12 @@ int OnCalculate(const int rates_total,
                   {
                      objectName = "Buy Arrow "+IntegerToString((int)time[i])+ObjSuff+ObjSuff2;
                      ArrowCreate(objectName, time[i], ArrowLow, CharToString(BuyArrowStyle), BuyArrowColor, ANCHOR_LOWER, "Wingdings", BuyArrowFontSize);
-                     if(showSignalLine && i==0)
+                     int latestSignalBar = (useFormingCandles ? 0 : 1);
+                     if(showSignalLine && i==latestSignalBar)
                      {
                         objectName = "Buy Signal Line "+IntegerToString((int)time[i])+ObjSuff;
                         if(ObjectFind(0,objectName)<0)
-                           if(ObjectCreate(0,objectName,OBJ_TREND,0,time[i+1],close[0],time[i]+PeriodSeconds(),close[0]))
+                           if(ObjectCreate(0,objectName,OBJ_TREND,0,time[i+1],close[i],time[i]+PeriodSeconds(),close[i]))
                            { ObjectSetInteger(0,objectName,OBJPROP_BACK,true); ObjectSetInteger(0,objectName,OBJPROP_WIDTH,SignalLineSize); ObjectSetInteger(0,objectName,OBJPROP_COLOR,SignalLineBuyColor); ObjectSetInteger(0,objectName,OBJPROP_RAY_RIGHT,false); ObjectSetInteger(0,objectName,OBJPROP_HIDDEN,true); }
                      }
                      BuyArrowActive=true; SellArrowActive=false;
@@ -931,11 +944,12 @@ int OnCalculate(const int rates_total,
                   {
                      objectName = "Sell Arrow "+IntegerToString((int)time[i])+ObjSuff+ObjSuff2;
                      ArrowCreate(objectName, time[i], ArrowHigh, CharToString(SellArrowStyle), SellArrowColor, ANCHOR_UPPER, "Wingdings", SellArrowFontSize);
-                     if(showSignalLine && i==0)
+                     int latestSignalBar = (useFormingCandles ? 0 : 1);
+                     if(showSignalLine && i==latestSignalBar)
                      {
                         objectName = "Sell Signal Line "+IntegerToString((int)time[i])+ObjSuff;
                         if(ObjectFind(0,objectName)<0)
-                           if(ObjectCreate(0,objectName,OBJ_TREND,0,time[i+1],close[0],time[i]+PeriodSeconds(),close[0]))
+                           if(ObjectCreate(0,objectName,OBJ_TREND,0,time[i+1],close[i],time[i]+PeriodSeconds(),close[i]))
                            { ObjectSetInteger(0,objectName,OBJPROP_BACK,true); ObjectSetInteger(0,objectName,OBJPROP_WIDTH,SignalLineSize); ObjectSetInteger(0,objectName,OBJPROP_COLOR,SignalLineSellColor); ObjectSetInteger(0,objectName,OBJPROP_RAY_RIGHT,false); ObjectSetInteger(0,objectName,OBJPROP_HIDDEN,true); }
                      }
                      BuyArrowActive=false; SellArrowActive=true;
