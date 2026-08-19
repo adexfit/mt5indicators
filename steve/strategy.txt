@@ -1,0 +1,11 @@
+Setup
+1. draw a line at the high and low of Asia session
+2. This line should be deleted when a new daily candle is detected and
+   drawn at the end of Asia session each day
+
+
+Mode 1.
+
+Buy rules
+1. price once broke out of the high of the Asia session that day
+2. spearman indicator above -0.8 level when price is now in between the high and low of asia
