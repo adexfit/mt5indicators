@@ -1,0 +1,1 @@
+create for me an mq5 indicator that draws two SMMA (adjustable from input) of a default period 32 (adjustable from input) on the price chart. One applied to price high and the other price low. If stochastic 14 %K, 3 slowing, 1 %D crosses 20 level mark upward and price is above the high 
